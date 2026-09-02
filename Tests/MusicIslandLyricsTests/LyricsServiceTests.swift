@@ -74,6 +74,55 @@ struct LyricsServiceTests {
         #expect(result == .notFound)
     }
 
+    @Test func ignoresLrcApiNetworkFailuresWhenLrclibHasNoMatch() async throws {
+        let loader = StubLyricsLoader { request in
+            let url = try #require(request.url)
+            if url.host == "lrclib.net", url.path == "/api/get" {
+                return (Data(), httpResponse(url: url, statusCode: 404))
+            }
+            if url.host == "lrclib.net", url.path == "/api/search" {
+                return (Data("[]".utf8), httpResponse(url: url))
+            }
+            throw URLError(.secureConnectionFailed)
+        }
+
+        let service = LyricsService(loader: loader)
+        let result = try await service.fetch(for: TrackSnapshot(
+            title: "Missing",
+            artist: "Nobody",
+            album: "",
+            duration: 0,
+            position: 0,
+            isPlaying: true,
+            capturedAt: Date()
+        ))
+
+        #expect(result == .notFound)
+    }
+
+    @Test func reportsLrclibFailureWhenBothSourcesFail() async throws {
+        let loader = StubLyricsLoader { request in
+            let url = try #require(request.url)
+            if url.host == "lrclib.net" {
+                throw LyricsServiceError.server(503)
+            }
+            throw URLError(.secureConnectionFailed)
+        }
+
+        let service = LyricsService(loader: loader)
+        await #expect(throws: LyricsServiceError.server(503)) {
+            try await service.fetch(for: TrackSnapshot(
+                title: "Song",
+                artist: "Artist",
+                album: "",
+                duration: 0,
+                position: 0,
+                isPlaying: true,
+                capturedAt: Date()
+            ))
+        }
+    }
+
     @Test func keepsLrclibExactMatchFirst() async throws {
         let loader = StubLyricsLoader { request in
             let url = try #require(request.url)

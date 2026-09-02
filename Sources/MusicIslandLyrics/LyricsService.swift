@@ -10,7 +10,7 @@ extension URLSession: LyricsDataLoading {
     }
 }
 
-enum LyricsServiceError: LocalizedError {
+enum LyricsServiceError: LocalizedError, Equatable {
     case invalidResponse
     case server(Int)
 
@@ -71,8 +71,14 @@ struct LyricsService: Sendable {
             lrclibError = error
         }
 
-        if let fallback = try await requestLrcApi(track: track) {
-            return fallback
+        do {
+            if let fallback = try await requestLrcApi(track: track) {
+                return fallback
+            }
+        } catch {
+            if let lrclibError {
+                throw lrclibError
+            }
         }
 
         if let lrclibError {

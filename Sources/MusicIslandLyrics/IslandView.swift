@@ -283,24 +283,12 @@ struct IslandView: View {
         let position = min(max(model.displayPlaybackPosition, 0), duration)
 
         return VStack(spacing: 0) {
-            Slider(
-                value: Binding(
-                    get: {
-                        min(max(model.displayPlaybackPosition, 0), duration)
-                    },
-                    set: { newValue in
-                        model.updateSeekPreview(newValue)
-                    }
-                ),
-                in: 0...duration,
-                onEditingChanged: { editing in
-                    if !editing {
-                        model.finishSeeking()
-                    }
-                }
+            PlaybackScrubber(
+                position: position,
+                duration: duration,
+                onScrub: model.updateSeekPreview,
+                onCommit: model.finishSeeking
             )
-            .controlSize(.mini)
-            .tint(.white.opacity(0.82))
             .frame(height: 14)
 
             HStack {
@@ -398,6 +386,69 @@ struct IslandView: View {
         case .permissionRequired(let message), .error(let message): return message
         default: return "在 Apple Music 中播放一首歌"
         }
+    }
+}
+
+private struct PlaybackScrubber: View {
+    let position: TimeInterval
+    let duration: TimeInterval
+    let onScrub: (TimeInterval) -> Void
+    let onCommit: () -> Void
+
+    @State private var isHoveringKnob = false
+    @State private var isDragging = false
+
+    private var progress: CGFloat {
+        guard duration > 0 else { return 0 }
+        return min(max(position / duration, 0), 1)
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = max(geometry.size.width, 1)
+            let knobSize: CGFloat = isHoveringKnob || isDragging ? 10 : 7
+            let filledWidth = width * progress
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.white.opacity(0.18))
+                    .frame(height: 3)
+
+                Capsule()
+                    .fill(.white.opacity(0.86))
+                    .frame(width: max(filledWidth, 0), height: 3)
+
+                Circle()
+                    .fill(.white)
+                    .shadow(color: .black.opacity(0.45), radius: 2, x: 0, y: 1)
+                    .frame(width: knobSize, height: knobSize)
+                    .offset(x: min(max(filledWidth - knobSize / 2, 0), width - knobSize))
+                    .onHover { hovering in
+                        isHoveringKnob = hovering
+                    }
+                    .animation(.easeOut(duration: 0.12), value: isHoveringKnob)
+                    .animation(.easeOut(duration: 0.12), value: isDragging)
+            }
+            .frame(maxHeight: .infinity, alignment: .center)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        isDragging = true
+                        onScrub(time(for: value.location.x, width: width))
+                    }
+                    .onEnded { value in
+                        onScrub(time(for: value.location.x, width: width))
+                        isDragging = false
+                        onCommit()
+                    }
+            )
+        }
+        .accessibilityLabel("播放进度")
+    }
+
+    private func time(for x: CGFloat, width: CGFloat) -> TimeInterval {
+        duration * min(max(x / width, 0), 1)
     }
 }
 
