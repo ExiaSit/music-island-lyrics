@@ -122,6 +122,8 @@ struct IslandView: View {
             }
             .padding(.horizontal, 16)
             .frame(width: islandWidth, height: 38)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2, perform: model.activateMusicApp)
         } else {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -151,20 +153,23 @@ struct IslandView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.55))
 
-                TextField(
-                    text: $model.searchQuery,
-                    prompt: Text("搜索歌名、歌手或专辑")
-                        .foregroundStyle(.white.opacity(0.45))
-                ) {
-                    EmptyView()
+                ZStack(alignment: .leading) {
+                    if model.searchQuery.isEmpty {
+                        Text("搜索歌名、歌手或专辑")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.78))
+                            .allowsHitTesting(false)
+                    }
+
+                    TextField("", text: $model.searchQuery)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white)
+                        .foregroundStyle(.white)
+                        .tint(.white)
+                        .focused($searchFieldFocused)
+                        .onExitCommand(perform: model.closeSearch)
                 }
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white)
-                    .foregroundStyle(.white)
-                    .tint(.white)
-                    .focused($searchFieldFocused)
-                    .onExitCommand(perform: model.closeSearch)
 
                 if !model.searchQuery.isEmpty {
                     Button(action: { model.searchQuery = "" }) {

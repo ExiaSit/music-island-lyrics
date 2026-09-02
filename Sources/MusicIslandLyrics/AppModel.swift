@@ -83,6 +83,23 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func activateMusicApp() {
+        let musicAppURL = URL(fileURLWithPath: "/System/Applications/Music.app")
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+
+        NSWorkspace.shared.openApplication(
+            at: musicAppURL,
+            configuration: configuration
+        ) { [weak self] application, error in
+            Task { @MainActor in
+                if error != nil || application == nil {
+                    self?.status = .error("无法打开 Music。")
+                }
+            }
+        }
+    }
+
     func updateHovering(_ hovering: Bool) {
         guard islandPresentation != .search else { return }
         islandPresentation = hovering ? .hover : .compact
