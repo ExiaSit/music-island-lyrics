@@ -161,8 +161,10 @@ struct LyricsService: Sendable {
     }
 
     private func lrcApiQueryItems(for track: TrackSnapshot) -> [URLQueryItem] {
+        let primaryTitle = stripBracketedQualifiers(from: track.title)
+        let title = primaryTitle.isEmpty ? track.title : primaryTitle
         var items = [
-            URLQueryItem(name: "title", value: track.title),
+            URLQueryItem(name: "title", value: title),
             URLQueryItem(name: "artist", value: track.artist)
         ]
         if !track.album.isEmpty {

@@ -209,6 +209,38 @@ struct LyricsServiceTests {
 
         #expect(result == .synced([LyricLine(time: 2, text: "Right song")]))
     }
+
+    @Test func sendsPrimaryTitleToLrcApiFallback() async throws {
+        let loader = StubLyricsLoader { request in
+            let url = try #require(request.url)
+            if url.host == "lrclib.net", url.path == "/api/get" {
+                return (Data(), httpResponse(url: url, statusCode: 404))
+            }
+            if url.host == "lrclib.net", url.path == "/api/search" {
+                return (Data("[]".utf8), httpResponse(url: url))
+            }
+
+            #expect(url.host == "api.lrc.cx")
+            let query = url.queryItems
+            #expect(query["title"] == "贵得可以")
+            #expect(query["artist"] == "苏慧伦")
+            #expect(query["title"]?.contains("婚礼") == false)
+            return (Data("[00:02.00]Right fallback".utf8), httpResponse(url: url))
+        }
+
+        let service = LyricsService(loader: loader)
+        let result = try await service.fetch(for: TrackSnapshot(
+            title: "贵得可以（影集《欠妳的那场婚礼》插曲）",
+            artist: "苏慧伦",
+            album: "",
+            duration: 210,
+            position: 0,
+            isPlaying: true,
+            capturedAt: Date()
+        ))
+
+        #expect(result == .synced([LyricLine(time: 2, text: "Right fallback")]))
+    }
 }
 
 private struct StubLyricsLoader: LyricsDataLoading {
