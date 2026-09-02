@@ -1,0 +1,299 @@
+import Combine
+import Foundation
+import AppKit
+
+@MainActor
+final class AppModel: ObservableObject {
+    static let shared = AppModel()
+
+    @Published private(set) var track: TrackSnapshot?
+    @Published private(set) var lyrics: LyricsResult = .notFound
+    @Published private(set) var artwork: NSImage?
+    @Published private(set) var status: DisplayStatus = .waitingForMusic
+    @Published var overlayVisible = true
+    @Published private(set) var islandPresentation: IslandPresentation = .compact
+    @Published var compactIslandHeight: CGFloat = 38
+    @Published var searchQuery = ""
+    @Published private(set) var searchResults: [StoreSearchResult] = []
+    @Published private(set) var searchStatus: StoreSearchStatus = .idle
+
+    private let reader = MusicReader()
+    private let lyricsService = LyricsService()
+    private let searchService: any StoreSearching
+    private let searchDebounce: Duration
+    private let searchCountry: String
+    private var monitorTask: Task<Void, Never>?
+    private var lyricsTask: Task<Void, Never>?
+    private var searchTask: Task<Void, Never>?
+    private var searchQueryCancellable: AnyCancellable?
+    private var loadedTrackIdentity: String?
+    private var searchCache: [SearchCacheKey: [StoreSearchResult]] = [:]
+
+    init(
+        searchService: any StoreSearching = StoreSearchService(),
+        searchDebounce: Duration = .milliseconds(600),
+        regionCode: String? = nil
+    ) {
+        self.searchService = searchService
+        self.searchDebounce = searchDebounce
+        self.searchCountry = StoreSearchService.normalizedCountry(
+            regionCode ?? Locale.current.region?.identifier ?? "CN"
+        )
+
+        searchQueryCancellable = $searchQuery
+            .removeDuplicates()
+            .sink { [weak self] query in
+                self?.scheduleSearch(for: query)
+            }
+    }
+
+    func start() {
+        guard monitorTask == nil else { return }
+        monitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refresh()
+                try? await Task.sleep(for: .milliseconds(750))
+            }
+        }
+    }
+
+    func retryLyrics() {
+        guard let track else { return }
+        loadedTrackIdentity = nil
+        loadLyricsIfNeeded(for: track)
+    }
+
+    func togglePlayback() {
+        do {
+            try reader.togglePlayback()
+            Task { await refresh() }
+        } catch {
+            status = .error(error.localizedDescription)
+        }
+    }
+
+    func playNext() {
+        do {
+            try reader.nextTrack()
+            loadedTrackIdentity = nil
+            Task { await refresh() }
+        } catch {
+            status = .error(error.localizedDescription)
+        }
+    }
+
+    func updateHovering(_ hovering: Bool) {
+        guard islandPresentation != .search else { return }
+        islandPresentation = hovering ? .hover : .compact
+    }
+
+    func openSearch() {
+        islandPresentation = .search
+    }
+
+    func closeSearch() {
+        searchTask?.cancel()
+        searchQuery = ""
+        searchResults = []
+        searchStatus = .idle
+        islandPresentation = .compact
+    }
+
+    func openSearchResult(_ result: StoreSearchResult) {
+        let musicAppURL = URL(fileURLWithPath: "/System/Applications/Music.app")
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+
+        NSWorkspace.shared.open(
+            [result.storeURL],
+            withApplicationAt: musicAppURL,
+            configuration: configuration
+        ) { [weak self] application, error in
+            Task { @MainActor in
+                guard let self else { return }
+                if error == nil, application != nil {
+                    self.closeSearch()
+                } else if NSWorkspace.shared.open(result.storeURL) {
+                    self.closeSearch()
+                } else {
+                    self.searchStatus = .failure("无法在 Music 或浏览器中打开这首歌。")
+                }
+            }
+        }
+    }
+
+    var searchPanelRowCount: Int {
+        switch searchStatus {
+        case .idle:
+            return 0
+        case .loading, .empty, .failure:
+            return 1
+        case .results:
+            return min(searchResults.count, 6)
+        }
+    }
+
+    var islandExtraHeight: CGFloat {
+        switch islandPresentation {
+        case .compact:
+            return 0
+        case .hover:
+            return 40
+        case .search:
+            return 50 + CGFloat(searchPanelRowCount * 42)
+        }
+    }
+
+    var currentLineIndex: Int? {
+        guard let track, case .synced(let lines) = lyrics, !lines.isEmpty else { return nil }
+        return LyricSynchronizer.lineIndex(at: track.position + 0.08, in: lines)
+    }
+
+    var currentLyric: String {
+        if case .error(let message) = status {
+            return message
+        }
+        switch lyrics {
+        case .synced(let lines):
+            guard let index = currentLineIndex, lines.indices.contains(index) else {
+                return "等待歌词开始…"
+            }
+            return lines[index].text
+        case .plain(let text):
+            return text.components(separatedBy: .newlines)
+                .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+                ?? "已获取普通歌词"
+        case .instrumental:
+            return "纯音乐 · 请享受旋律"
+        case .notFound:
+            return "暂未找到歌词"
+        }
+    }
+
+    var nextLyric: String? {
+        guard
+            case .synced(let lines) = lyrics,
+            let index = currentLineIndex,
+            lines.indices.contains(index + 1)
+        else { return nil }
+        return lines[index + 1].text
+    }
+
+    private func refresh() async {
+        do {
+            guard let snapshot = try reader.currentTrack() else {
+                track = nil
+                artwork = nil
+                status = .waitingForMusic
+                loadedTrackIdentity = nil
+                return
+            }
+
+            track = snapshot
+            loadLyricsIfNeeded(for: snapshot)
+        } catch let error as MusicReaderError {
+            track = nil
+            switch error {
+            case .automationDenied:
+                status = .permissionRequired(error.localizedDescription)
+            case .script:
+                status = .error(error.localizedDescription)
+            }
+        } catch {
+            track = nil
+            status = .error(error.localizedDescription)
+        }
+    }
+
+    private func loadLyricsIfNeeded(for snapshot: TrackSnapshot) {
+        guard loadedTrackIdentity != snapshot.identity else { return }
+        loadedTrackIdentity = snapshot.identity
+        lyricsTask?.cancel()
+        artwork = try? reader.currentArtwork()
+        lyrics = .notFound
+        status = .loadingLyrics
+
+        lyricsTask = Task { [weak self, lyricsService] in
+            do {
+                let result = try await lyricsService.fetch(for: snapshot)
+                guard !Task.isCancelled, self?.track?.identity == snapshot.identity else { return }
+                self?.lyrics = result
+                switch result {
+                case .synced, .plain:
+                    self?.status = .showingLyrics
+                case .instrumental:
+                    self?.status = .instrumental
+                case .notFound:
+                    self?.status = .lyricsNotFound
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled, self?.track?.identity == snapshot.identity else { return }
+                self?.lyrics = .notFound
+                self?.status = .error(error.localizedDescription)
+            }
+        }
+    }
+
+    private func scheduleSearch(for rawQuery: String) {
+        searchTask?.cancel()
+
+        let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            searchResults = []
+            searchStatus = .idle
+            return
+        }
+
+        let cacheKey = SearchCacheKey(query: query, country: searchCountry)
+        if let cached = searchCache[cacheKey] {
+            searchResults = cached
+            searchStatus = cached.isEmpty ? .empty : .results
+            return
+        }
+
+        searchResults = []
+        searchStatus = .loading
+        searchTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(for: searchDebounce)
+                try Task.checkCancellation()
+                let results = try await searchService.search(
+                    term: query,
+                    country: searchCountry,
+                    limit: 6
+                )
+                try Task.checkCancellation()
+                guard searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == query else {
+                    return
+                }
+                searchCache[cacheKey] = results
+                searchResults = results
+                searchStatus = results.isEmpty ? .empty : .results
+            } catch is CancellationError {
+                return
+            } catch {
+                guard searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == query else {
+                    return
+                }
+                searchResults = []
+                searchStatus = .failure(error.localizedDescription)
+            }
+        }
+    }
+}
+
+private struct SearchCacheKey: Hashable {
+    let query: String
+    let country: String
+
+    init(query: String, country: String) {
+        self.query = query.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: .current
+        )
+        self.country = country
+    }
+}
