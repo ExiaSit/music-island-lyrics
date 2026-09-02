@@ -256,10 +256,8 @@ final class AppModel: ObservableObject {
         lyricsTask?.cancel()
         artworkTask?.cancel()
         seekPreviewPosition = nil
-        artwork = try? reader.currentArtwork(for: snapshot)
-        if artwork == nil {
-            loadArtworkFallback(for: snapshot)
-        }
+        artwork = nil
+        loadArtwork(for: snapshot)
         lyrics = .notFound
         status = .loadingLyrics
 
@@ -286,11 +284,36 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func loadArtworkFallback(for snapshot: TrackSnapshot) {
+    private func loadArtwork(for snapshot: TrackSnapshot) {
         let query = "\(snapshot.title) \(snapshot.artist)"
         let country = searchCountry
         artworkTask = Task { [weak self, searchService] in
+            let retryDelays: [Duration] = [
+                .zero,
+                .milliseconds(600),
+                .milliseconds(1_500),
+                .seconds(3)
+            ]
+
             do {
+                for delay in retryDelays {
+                    if delay > .zero {
+                        try await Task.sleep(for: delay)
+                    }
+                    try Task.checkCancellation()
+
+                    let image = try await MainActor.run { [weak self] in
+                        try self?.reader.currentArtwork(for: snapshot)
+                    }
+                    if let image {
+                        await MainActor.run {
+                            guard self?.track?.identity == snapshot.identity else { return }
+                            self?.artwork = image
+                        }
+                        return
+                    }
+                }
+
                 let results = try await searchService.search(
                     term: query,
                     country: country,
