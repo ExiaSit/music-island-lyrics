@@ -24,6 +24,7 @@ final class AppModel: ObservableObject {
     private let searchCountry: String
     private var monitorTask: Task<Void, Never>?
     private var lyricsTask: Task<Void, Never>?
+    private var artworkTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
     private var searchQueryCancellable: AnyCancellable?
     private var loadedTrackIdentity: String?
@@ -184,6 +185,7 @@ final class AppModel: ObservableObject {
             guard let snapshot = try reader.currentTrack() else {
                 track = nil
                 artwork = nil
+                artworkTask?.cancel()
                 status = .waitingForMusic
                 loadedTrackIdentity = nil
                 return
@@ -209,7 +211,11 @@ final class AppModel: ObservableObject {
         guard loadedTrackIdentity != snapshot.identity else { return }
         loadedTrackIdentity = snapshot.identity
         lyricsTask?.cancel()
+        artworkTask?.cancel()
         artwork = try? reader.currentArtwork()
+        if artwork == nil {
+            loadArtworkFallback(for: snapshot)
+        }
         lyrics = .notFound
         status = .loadingLyrics
 
@@ -232,6 +238,38 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled, self?.track?.identity == snapshot.identity else { return }
                 self?.lyrics = .notFound
                 self?.status = .error(error.localizedDescription)
+            }
+        }
+    }
+
+    private func loadArtworkFallback(for snapshot: TrackSnapshot) {
+        let query = "\(snapshot.title) \(snapshot.artist)"
+        let country = searchCountry
+        artworkTask = Task { [weak self, searchService] in
+            do {
+                let results = try await searchService.search(
+                    term: query,
+                    country: country,
+                    limit: 3
+                )
+                guard
+                    !Task.isCancelled,
+                    let artworkURL = results.first?.artworkURL
+                else { return }
+
+                let (data, _) = try await URLSession.shared.data(from: artworkURL)
+                try Task.checkCancellation()
+
+                await MainActor.run {
+                    guard
+                        self?.track?.identity == snapshot.identity,
+                        self?.artwork == nil,
+                        let image = NSImage(data: data)
+                    else { return }
+                    self?.artwork = image
+                }
+            } catch {
+                return
             }
         }
     }

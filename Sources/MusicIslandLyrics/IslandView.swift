@@ -75,11 +75,12 @@ struct IslandView: View {
                 }
                 .frame(width: 120, height: 30, alignment: .leading)
 
-                Color.clear.frame(width: 180)
+                Color.clear.frame(width: 172)
 
                 artworkView
             }
-            .padding(.horizontal, 16)
+            .padding(.leading, 16)
+            .padding(.trailing, 24)
             .frame(width: islandWidth, height: model.compactIslandHeight)
             .animation(.easeInOut(duration: 0.18), value: model.currentLyric)
         } else {
