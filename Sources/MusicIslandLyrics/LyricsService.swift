@@ -122,6 +122,7 @@ struct LyricsService: Sendable {
         let source = String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !source.isEmpty, !looksLikeErrorPayload(source) else { return nil }
+        guard lrcApiPayloadMatchesTrack(source, track: track) else { return nil }
 
         let lines = LRCParser.parse(source)
         if !lines.isEmpty { return .synced(lines) }
@@ -242,5 +243,52 @@ struct LyricsService: Sendable {
             || normalized.hasPrefix("<!doctype html")
             || normalized.hasPrefix("<html")
             || normalized == "not found"
+    }
+
+    private func lrcApiPayloadMatchesTrack(_ source: String, track: TrackSnapshot) -> Bool {
+        let metadata = lrcMetadata(in: source)
+        if let metadataTitle = metadata["ti"], !metadataTitle.isEmpty {
+            guard normalizedTitleCandidates(for: track.title).contains(normalize(metadataTitle)) else {
+                return false
+            }
+        }
+        if let metadataArtist = metadata["ar"], !metadataArtist.isEmpty {
+            let trackArtist = normalize(track.artist)
+            let sourceArtist = normalize(metadataArtist)
+            guard !trackArtist.isEmpty,
+                  !sourceArtist.isEmpty,
+                  sourceArtist.contains(trackArtist) || trackArtist.contains(sourceArtist)
+            else { return false }
+        }
+        if metadata["ti"] != nil || metadata["ar"] != nil {
+            return true
+        }
+
+        // LrcApi returns only raw LRC for many songs, with no result title or artist
+        // to verify. In that case, accept it only when the lyrics text itself
+        // contains the current song's primary title. This is intentionally
+        // conservative: showing no lyrics is better than showing the wrong song.
+        let normalizedBody = normalize(source)
+        return normalizedTitleCandidates(for: track.title)
+            .contains { title in
+                title.count >= 2 && normalizedBody.contains(title)
+            }
+    }
+
+    private func lrcMetadata(in source: String) -> [String: String] {
+        source.components(separatedBy: .newlines)
+            .reduce(into: [:]) { result, line in
+                guard line.hasPrefix("["),
+                      let closeIndex = line.firstIndex(of: "]")
+                else { return }
+
+                let content = String(line[line.index(after: line.startIndex)..<closeIndex])
+                let parts = content.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+                guard parts.count == 2 else { return }
+
+                let key = String(parts[0]).lowercased()
+                guard key == "ti" || key == "ar" else { return }
+                result[key] = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
     }
 }

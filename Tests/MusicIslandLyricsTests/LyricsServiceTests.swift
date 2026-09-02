@@ -22,7 +22,7 @@ struct LyricsServiceTests {
 
             let lrc = """
             [00:14.66]已经听了一百遍
-            [01:09.55]情人总分分合合
+            [01:09.55]我们的歌那么真
             """
             return (Data(lrc.utf8), httpResponse(url: url))
         }
@@ -44,7 +44,7 @@ struct LyricsServiceTests {
         }
         #expect(lines == [
             LyricLine(time: 14.66, text: "已经听了一百遍"),
-            LyricLine(time: 69.55, text: "情人总分分合合")
+            LyricLine(time: 69.55, text: "我们的歌那么真")
         ])
     }
 
@@ -225,7 +225,7 @@ struct LyricsServiceTests {
             #expect(query["title"] == "贵得可以")
             #expect(query["artist"] == "苏慧伦")
             #expect(query["title"]?.contains("婚礼") == false)
-            return (Data("[00:02.00]Right fallback".utf8), httpResponse(url: url))
+            return (Data("[00:02.00]贵得可以 right fallback".utf8), httpResponse(url: url))
         }
 
         let service = LyricsService(loader: loader)
@@ -239,7 +239,71 @@ struct LyricsServiceTests {
             capturedAt: Date()
         ))
 
-        #expect(result == .synced([LyricLine(time: 2, text: "Right fallback")]))
+        #expect(result == .synced([LyricLine(time: 2, text: "贵得可以 right fallback")]))
+    }
+
+    @Test func rejectsUnverifiedRawLrcApiLyrics() async throws {
+        let loader = StubLyricsLoader { request in
+            let url = try #require(request.url)
+            if url.host == "lrclib.net", url.path == "/api/get" {
+                return (Data(), httpResponse(url: url, statusCode: 404))
+            }
+            if url.host == "lrclib.net", url.path == "/api/search" {
+                return (Data("[]".utf8), httpResponse(url: url))
+            }
+
+            let wrongLrc = """
+            [00:26.08]像是太陽失去它的溫度
+            [01:01.69]誰說愛情可以優雅的結束
+            [01:15.07]想要回到過去把時間留住
+            """
+            return (Data(wrongLrc.utf8), httpResponse(url: url))
+        }
+
+        let service = LyricsService(loader: loader)
+        let result = try await service.fetch(for: TrackSnapshot(
+            title: "贵得可以（影集《欠妳的那场婚礼》插曲）",
+            artist: "苏慧伦",
+            album: "",
+            duration: 210,
+            position: 0,
+            isPlaying: true,
+            capturedAt: Date()
+        ))
+
+        #expect(result == .notFound)
+    }
+
+    @Test func acceptsLrcApiLyricsWithMatchingMetadata() async throws {
+        let loader = StubLyricsLoader { request in
+            let url = try #require(request.url)
+            if url.host == "lrclib.net", url.path == "/api/get" {
+                return (Data(), httpResponse(url: url, statusCode: 404))
+            }
+            if url.host == "lrclib.net", url.path == "/api/search" {
+                return (Data("[]".utf8), httpResponse(url: url))
+            }
+
+            let lrc = """
+            [ti:贵得可以]
+            [ar:苏慧伦]
+            [00:02.00]Right metadata fallback
+            """
+            return (Data(lrc.utf8), httpResponse(url: url))
+        }
+
+        let service = LyricsService(loader: loader)
+        let result = try await service.fetch(for: TrackSnapshot(
+            title: "贵得可以（影集《欠妳的那场婚礼》插曲）",
+            artist: "苏慧伦",
+            album: "",
+            duration: 210,
+            position: 0,
+            isPlaying: true,
+            capturedAt: Date()
+        ))
+
+        #expect(result == .synced([LyricLine(time: 2, text: "Right metadata fallback")]))
     }
 }
 
