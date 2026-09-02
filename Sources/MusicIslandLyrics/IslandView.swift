@@ -151,10 +151,18 @@ struct IslandView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.55))
 
-                TextField("搜索歌名、歌手或专辑", text: $model.searchQuery)
+                TextField(
+                    text: $model.searchQuery,
+                    prompt: Text("搜索歌名、歌手或专辑")
+                        .foregroundStyle(.white.opacity(0.45))
+                ) {
+                    EmptyView()
+                }
                     .textFieldStyle(.plain)
                     .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white)
                     .foregroundStyle(.white)
+                    .tint(.white)
                     .focused($searchFieldFocused)
                     .onExitCommand(perform: model.closeSearch)
 
