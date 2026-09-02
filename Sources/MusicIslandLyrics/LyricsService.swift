@@ -248,7 +248,9 @@ struct LyricsService: Sendable {
     private func lrcApiPayloadMatchesTrack(_ source: String, track: TrackSnapshot) -> Bool {
         let metadata = lrcMetadata(in: source)
         if let metadataTitle = metadata["ti"], !metadataTitle.isEmpty {
-            guard normalizedTitleCandidates(for: track.title).contains(normalize(metadataTitle)) else {
+            guard normalizedTitleCandidates(for: track.title).contains(normalize(metadataTitle))
+                    || phoneticTitleCandidates(for: track.title).contains(phoneticNormalize(metadataTitle))
+            else {
                 return false
             }
         }
@@ -269,10 +271,18 @@ struct LyricsService: Sendable {
         // contains the current song's primary title. This is intentionally
         // conservative: showing no lyrics is better than showing the wrong song.
         let normalizedBody = normalize(source)
-        return normalizedTitleCandidates(for: track.title)
-            .contains { title in
+        if normalizedTitleCandidates(for: track.title)
+            .contains(where: { title in
                 title.count >= 2 && normalizedBody.contains(title)
-            }
+            }) {
+            return true
+        }
+
+        let phoneticBody = phoneticNormalize(source)
+        return phoneticTitleCandidates(for: track.title)
+            .contains(where: { title in
+                title.count >= 4 && phoneticBody.contains(title)
+            })
     }
 
     private func lrcMetadata(in source: String) -> [String: String] {
@@ -290,5 +300,19 @@ struct LyricsService: Sendable {
                 guard key == "ti" || key == "ar" else { return }
                 result[key] = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
             }
+    }
+
+    private func phoneticTitleCandidates(for title: String) -> Set<String> {
+        let normalizedTitle = phoneticNormalize(title)
+        let normalizedPrimaryTitle = phoneticNormalize(stripBracketedQualifiers(from: title))
+        return Set([normalizedTitle, normalizedPrimaryTitle].filter { !$0.isEmpty })
+    }
+
+    private func phoneticNormalize(_ value: String) -> String {
+        let latin = value.applyingTransform(.toLatin, reverse: false) ?? value
+        let plain = latin.applyingTransform(.stripDiacritics, reverse: false) ?? latin
+        return plain
+            .lowercased()
+            .replacingOccurrences(of: #"[^\p{L}\p{N}]"#, with: "", options: .regularExpression)
     }
 }

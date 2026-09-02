@@ -305,6 +305,40 @@ struct LyricsServiceTests {
 
         #expect(result == .synced([LyricLine(time: 2, text: "Right metadata fallback")]))
     }
+
+    @Test func acceptsTraditionalRawLrcApiLyricsForSimplifiedTitle() async throws {
+        let loader = StubLyricsLoader { request in
+            let url = try #require(request.url)
+            if url.host == "lrclib.net", url.path == "/api/get" {
+                return (Data(), httpResponse(url: url, statusCode: 404))
+            }
+            if url.host == "lrclib.net", url.path == "/api/search" {
+                return (Data("[]".utf8), httpResponse(url: url))
+            }
+
+            let lrc = """
+            [00:14.25]換掉你氣味 殘留棉被
+            [01:00.74]Hoh, baby 斷了吧
+            """
+            return (Data(lrc.utf8), httpResponse(url: url))
+        }
+
+        let service = LyricsService(loader: loader)
+        let result = try await service.fetch(for: TrackSnapshot(
+            title: "断了",
+            artist: "李玟",
+            album: "",
+            duration: 250,
+            position: 0,
+            isPlaying: true,
+            capturedAt: Date()
+        ))
+
+        #expect(result == .synced([
+            LyricLine(time: 14.25, text: "換掉你氣味 殘留棉被"),
+            LyricLine(time: 60.74, text: "Hoh, baby 斷了吧")
+        ]))
+    }
 }
 
 private struct StubLyricsLoader: LyricsDataLoading {
