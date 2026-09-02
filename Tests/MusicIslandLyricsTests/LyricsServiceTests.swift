@@ -153,6 +153,62 @@ struct LyricsServiceTests {
 
         #expect(result == .synced([LyricLine(time: 1, text: "From LRCLIB")]))
     }
+
+    @Test func rejectsWrongExactMatchAndUsesPrimaryTitleMatch() async throws {
+        let loader = StubLyricsLoader { request in
+            let url = try #require(request.url)
+            if url.host == "lrclib.net", url.path == "/api/get" {
+                let wrongBody = """
+                {
+                  "trackName": "婚礼的祝福",
+                  "artistName": "陈奕迅",
+                  "duration": 260,
+                  "instrumental": false,
+                  "plainLyrics": null,
+                  "syncedLyrics": "[00:01.00]Wrong song"
+                }
+                """
+                return (Data(wrongBody.utf8), httpResponse(url: url))
+            }
+            if url.host == "lrclib.net", url.path == "/api/search" {
+                let searchBody = """
+                [
+                  {
+                    "trackName": "婚礼的祝福",
+                    "artistName": "陈奕迅",
+                    "duration": 260,
+                    "instrumental": false,
+                    "plainLyrics": null,
+                    "syncedLyrics": "[00:01.00]Wrong song"
+                  },
+                  {
+                    "trackName": "贵得可以",
+                    "artistName": "苏慧伦",
+                    "duration": 210,
+                    "instrumental": false,
+                    "plainLyrics": null,
+                    "syncedLyrics": "[00:02.00]Right song"
+                  }
+                ]
+                """
+                return (Data(searchBody.utf8), httpResponse(url: url))
+            }
+            return (Data(#"{"detail":"Not Found"}"#.utf8), httpResponse(url: url))
+        }
+
+        let service = LyricsService(loader: loader)
+        let result = try await service.fetch(for: TrackSnapshot(
+            title: "贵得可以（影集《欠妳的那场婚礼》插曲）",
+            artist: "苏慧伦",
+            album: "",
+            duration: 210,
+            position: 0,
+            isPlaying: true,
+            capturedAt: Date()
+        ))
+
+        #expect(result == .synced([LyricLine(time: 2, text: "Right song")]))
+    }
 }
 
 private struct StubLyricsLoader: LyricsDataLoading {

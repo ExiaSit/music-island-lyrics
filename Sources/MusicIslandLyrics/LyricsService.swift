@@ -60,7 +60,9 @@ struct LyricsService: Sendable {
 
         do {
             if let exact = try await requestExact(track: track) {
-                return makeResult(exact)
+                if isLikelyMatch(exact, for: track) {
+                    return makeResult(exact)
+                }
             }
 
             let matches = try await search(track: track)
@@ -170,15 +172,26 @@ struct LyricsService: Sendable {
     }
 
     private func bestMatch(in matches: [Response], for track: TrackSnapshot) -> Response? {
-        let normalizedTitle = normalize(track.title)
+        let normalizedTitles = normalizedTitleCandidates(for: track.title)
         let normalizedArtist = normalize(track.artist)
 
         return matches
-            .filter { normalize($0.trackName) == normalizedTitle }
+            .filter { normalizedTitles.contains(normalize($0.trackName)) }
             .min { lhs, rhs in
                 score(lhs, artist: normalizedArtist, duration: track.duration)
                     < score(rhs, artist: normalizedArtist, duration: track.duration)
             }
+    }
+
+    private func isLikelyMatch(_ candidate: Response, for track: TrackSnapshot) -> Bool {
+        let titleMatches = normalizedTitleCandidates(for: track.title)
+            .contains(normalize(candidate.trackName))
+        let trackArtist = normalize(track.artist)
+        let candidateArtist = normalize(candidate.artistName)
+        let artistMatches = !trackArtist.isEmpty
+            && !candidateArtist.isEmpty
+            && (candidateArtist.contains(trackArtist) || trackArtist.contains(candidateArtist))
+        return titleMatches && artistMatches
     }
 
     private func score(_ candidate: Response, artist: String, duration: Double) -> Double {
@@ -191,6 +204,21 @@ struct LyricsService: Sendable {
         value
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             .replacingOccurrences(of: #"[^\p{L}\p{N}]"#, with: "", options: .regularExpression)
+    }
+
+    private func normalizedTitleCandidates(for title: String) -> Set<String> {
+        let normalizedTitle = normalize(title)
+        let normalizedPrimaryTitle = normalize(stripBracketedQualifiers(from: title))
+        return Set([normalizedTitle, normalizedPrimaryTitle].filter { !$0.isEmpty })
+    }
+
+    private func stripBracketedQualifiers(from title: String) -> String {
+        title
+            .replacingOccurrences(of: #"（[^）]*）"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\([^)]*\)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"【[^】]*】"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\[[^\]]*\]"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func makeResult(_ response: Response) -> LyricsResult {
