@@ -286,16 +286,19 @@ final class AppModel: ObservableObject {
 
     private func loadArtwork(for snapshot: TrackSnapshot) {
         let query = "\(snapshot.title) \(snapshot.artist)"
-        let country = searchCountry
+        let primaryCountry = searchCountry
         artworkTask = Task { [weak self, searchService] in
             let retryDelays: [Duration] = [
                 .zero,
                 .milliseconds(600),
                 .milliseconds(1_500),
-                .seconds(3)
+                .seconds(3),
+                .seconds(6),
+                .seconds(10)
             ]
 
             do {
+                // Phase 1: Try to read embedded artwork from Music.app
                 for delay in retryDelays {
                     if delay > .zero {
                         try await Task.sleep(for: delay)
@@ -314,26 +317,33 @@ final class AppModel: ObservableObject {
                     }
                 }
 
-                let results = try await searchService.search(
-                    term: query,
-                    country: country,
-                    limit: 3
-                )
-                guard
-                    !Task.isCancelled,
-                    let artworkURL = Self.matchingArtworkURL(in: results, for: snapshot)
-                else { return }
-
-                let (data, _) = try await URLSession.shared.data(from: artworkURL)
-                try Task.checkCancellation()
-
-                await MainActor.run {
+                // Phase 2: iTunes Search API fallback with multi-region retry
+                let countries = Self.searchCountries(for: snapshot, primary: primaryCountry)
+                for country in countries {
+                    try Task.checkCancellation()
+                    let results = try await searchService.search(
+                        term: query,
+                        country: country,
+                        limit: 5
+                    )
                     guard
-                        self?.track?.identity == snapshot.identity,
-                        self?.artwork == nil,
-                        let image = NSImage(data: data)
-                    else { return }
-                    self?.artwork = image
+                        !Task.isCancelled,
+                        let artworkURL = Self.matchingArtworkURL(in: results, for: snapshot)
+                    else { continue }
+
+                    let resolvedURL = Self.upgradeArtworkURL(artworkURL)
+                    let (data, _) = try await URLSession.shared.data(from: resolvedURL)
+                    try Task.checkCancellation()
+
+                    await MainActor.run {
+                        guard
+                            self?.track?.identity == snapshot.identity,
+                            self?.artwork == nil,
+                            let image = NSImage(data: data)
+                        else { return }
+                        self?.artwork = image
+                    }
+                    return
                 }
             } catch {
                 return
@@ -349,7 +359,8 @@ final class AppModel: ObservableObject {
         let trackArtist = normalizeForMatching(snapshot.artist)
         let trackAlbum = normalizeForMatching(snapshot.album)
 
-        return results.first { result in
+        // Pass 1: strict match (title exact + artist contains + album exact)
+        if let url = results.first(where: { result in
             let resultTitle = normalizeForMatching(result.title)
             let resultArtist = normalizeForMatching(result.artist)
             let resultAlbum = normalizeForMatching(result.album)
@@ -362,13 +373,95 @@ final class AppModel: ObservableObject {
                 || resultAlbum == trackAlbum
 
             return titleMatches && artistMatches && albumMatches
-        }?.artworkURL
+        })?.artworkURL {
+            return url
+        }
+
+        // Pass 2: relaxed match (stripped title + artist contains)
+        let strippedTrackTitle = stripTitleSuffixes(trackTitle)
+        if let url = results.first(where: { result in
+            let strippedResultTitle = stripTitleSuffixes(normalizeForMatching(result.title))
+            let resultArtist = normalizeForMatching(result.artist)
+
+            let titleMatches = !strippedTrackTitle.isEmpty
+                && (strippedResultTitle == strippedTrackTitle
+                    || strippedResultTitle.contains(strippedTrackTitle)
+                    || strippedTrackTitle.contains(strippedResultTitle))
+            let artistMatches = resultArtist.contains(trackArtist)
+                || trackArtist.contains(resultArtist)
+
+            return titleMatches && artistMatches
+        })?.artworkURL {
+            return url
+        }
+
+        // Pass 3: first result with any artwork URL
+        return results.first { $0.artworkURL != nil }?.artworkURL
     }
 
     private nonisolated static func normalizeForMatching(_ value: String) -> String {
         value
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             .replacingOccurrences(of: #"[^\p{L}\p{N}]"#, with: "", options: .regularExpression)
+    }
+
+    /// Remove common suffixes like "remastered", "deluxe", "bonus track" etc.
+    private nonisolated static func stripTitleSuffixes(_ value: String) -> String {
+        var result = value
+        let suffixes = [
+            "remastered", "remaster", "deluxe", "bonus", "live",
+            "acoustic", "version", "edit", "radio", "single",
+            "explicit", "clean"
+        ]
+        for suffix in suffixes {
+            if result.hasSuffix(suffix) {
+                result = String(result.dropLast(suffix.count))
+            }
+        }
+        return result.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Upgrade artwork URL to higher resolution (600x600).
+    private nonisolated static func upgradeArtworkURL(_ url: URL) -> URL {
+        var path = url.absoluteString
+        // Check "100x100bb" first since "100x100" is a substring of it
+        if path.contains("/100x100bb") {
+            path = path.replacingOccurrences(of: "/100x100bb", with: "/600x600bb")
+            return URL(string: path) ?? url
+        }
+        if path.contains("/100x100") {
+            path = path.replacingOccurrences(of: "/100x100", with: "/600x600")
+            return URL(string: path) ?? url
+        }
+        return url
+    }
+
+    /// Determine the list of countries to search, primary first.
+    private nonisolated static func searchCountries(
+        for snapshot: TrackSnapshot,
+        primary: String
+    ) -> [String] {
+        var countries: [String] = [primary]
+        // Always add US as fallback (largest catalog)
+        if primary != "US" {
+            countries.append("US")
+        }
+        // For CJK artists, also try JP and KR
+        let artist = snapshot.artist
+        let isCJK = artist.unicodeScalars.contains { scalar in
+            (0x4E00...0x9FFF).contains(scalar.value)    // CJK
+                || (0x3040...0x30FF).contains(scalar.value) // Japanese
+                || (0xAC00...0xD7AF).contains(scalar.value) // Korean
+        }
+        if isCJK {
+            let extra = ["JP", "KR", "TW"]
+            for c in extra where c != primary {
+                countries.append(c)
+            }
+        }
+        // Deduplicate preserving order
+        var seen = Set<String>()
+        return countries.filter { seen.insert($0).inserted }
     }
 
     private func scheduleSearch(for rawQuery: String) {

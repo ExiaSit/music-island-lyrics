@@ -81,12 +81,13 @@ struct StoreSearchService: StoreSearching, Sendable {
                 return nil
             }
 
+            let artworkURL = item.artworkUrl100 ?? item.artworkUrl60
             return StoreSearchResult(
                 id: id,
                 title: title,
                 artist: artist,
                 album: item.collectionName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
-                artworkURL: item.artworkUrl100,
+                artworkURL: artworkURL,
                 storeURL: storeURL
             )
         }
@@ -124,5 +125,6 @@ private struct SearchItem: Decodable {
     let artistName: String?
     let collectionName: String?
     let artworkUrl100: URL?
+    let artworkUrl60: URL?
     let trackViewUrl: URL?
 }
