@@ -287,7 +287,58 @@ final class AppModel: ObservableObject {
     private func loadArtwork(for snapshot: TrackSnapshot) {
         let query = "\(snapshot.title) \(snapshot.artist)"
         let primaryCountry = searchCountry
+
         artworkTask = Task { [weak self, searchService] in
+            // Run Phase 1 (AppleScript local artwork) and Phase 2 (iTunes API)
+            // concurrently. Phase 1 has long retry delays; Phase 2 should not
+            // wait for it. Whichever succeeds first sets the artwork.
+
+            // Phase 2: iTunes Search API (runs immediately, does not wait
+            // for AppleScript retries to finish)
+            let phase2Task = Task { [weak self] in
+                let countries = Self.searchCountries(for: snapshot, primary: primaryCountry)
+                for country in countries {
+                    if Task.isCancelled { return }
+                    let results: [StoreSearchResult]
+                    do {
+                        results = try await searchService.search(
+                            term: query,
+                            country: country,
+                            limit: 5
+                        )
+                    } catch {
+                        continue
+                    }
+                    guard
+                        !Task.isCancelled,
+                        let artworkURL = Self.matchingArtworkURL(in: results, for: snapshot)
+                    else { continue }
+
+                    let resolvedURL = Self.upgradeArtworkURL(artworkURL)
+                    let imageData: Data
+                    do {
+                        let (data, _) = try await URLSession.shared.data(from: resolvedURL)
+                        imageData = data
+                    } catch {
+                        continue
+                    }
+                    if Task.isCancelled { return }
+
+                    await MainActor.run {
+                        guard
+                            self?.track?.identity == snapshot.identity,
+                            self?.artwork == nil,
+                            let image = NSImage(data: imageData)
+                        else { return }
+                        self?.artwork = image
+                    }
+                    return
+                }
+            }
+
+            // Phase 1: Try to read embedded artwork from Music.app.
+            // Errors here (e.g. AppleScript timeout, permission issues)
+            // do NOT affect Phase 2 which is already running.
             let retryDelays: [Duration] = [
                 .zero,
                 .milliseconds(600),
@@ -296,58 +347,32 @@ final class AppModel: ObservableObject {
                 .seconds(6),
                 .seconds(10)
             ]
+            for delay in retryDelays {
+                if delay > .zero {
+                    try? await Task.sleep(for: delay)
+                }
+                if Task.isCancelled { phase2Task.cancel(); return }
 
-            do {
-                // Phase 1: Try to read embedded artwork from Music.app
-                for delay in retryDelays {
-                    if delay > .zero {
-                        try await Task.sleep(for: delay)
-                    }
-                    try Task.checkCancellation()
-
-                    let image = try await MainActor.run { [weak self] in
-                        try self?.reader.currentArtwork(for: snapshot)
-                    }
-                    if let image {
-                        await MainActor.run {
-                            guard self?.track?.identity == snapshot.identity else { return }
-                            self?.artwork = image
-                        }
-                        return
+                let image: NSImage? = await MainActor.run { [weak self] in
+                    guard let self else { return nil }
+                    do {
+                        return try self.reader.currentArtwork(for: snapshot)
+                    } catch {
+                        return nil
                     }
                 }
-
-                // Phase 2: iTunes Search API fallback with multi-region retry
-                let countries = Self.searchCountries(for: snapshot, primary: primaryCountry)
-                for country in countries {
-                    try Task.checkCancellation()
-                    let results = try await searchService.search(
-                        term: query,
-                        country: country,
-                        limit: 5
-                    )
-                    guard
-                        !Task.isCancelled,
-                        let artworkURL = Self.matchingArtworkURL(in: results, for: snapshot)
-                    else { continue }
-
-                    let resolvedURL = Self.upgradeArtworkURL(artworkURL)
-                    let (data, _) = try await URLSession.shared.data(from: resolvedURL)
-                    try Task.checkCancellation()
-
+                if let image {
                     await MainActor.run {
-                        guard
-                            self?.track?.identity == snapshot.identity,
-                            self?.artwork == nil,
-                            let image = NSImage(data: data)
-                        else { return }
+                        guard self?.track?.identity == snapshot.identity else { return }
                         self?.artwork = image
                     }
+                    phase2Task.cancel()
                     return
                 }
-            } catch {
-                return
             }
+
+            // Phase 1 exhausted; let Phase 2 finish if still running
+            await phase2Task.value
         }
     }
 
@@ -395,8 +420,8 @@ final class AppModel: ObservableObject {
             return url
         }
 
-        // Pass 3: first result with any artwork URL
-        return results.first { $0.artworkURL != nil }?.artworkURL
+        // No match found — return nil rather than a wrong artwork
+        return nil
     }
 
     private nonisolated static func normalizeForMatching(_ value: String) -> String {
