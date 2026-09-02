@@ -75,15 +75,26 @@ struct MusicReader {
         )
     }
 
-    func currentArtwork() throws -> NSImage? {
-        let scriptSource = #"""
+    func currentArtwork(for track: TrackSnapshot) throws -> NSImage? {
+        let durationCheck: String
+        if track.duration > 0 {
+            durationCheck = "if (round (duration of t)) is not \(Int(track.duration.rounded())) then return missing value"
+        } else {
+            durationCheck = ""
+        }
+
+        let scriptSource = """
         tell application id "com.apple.Music"
             if player state is stopped then return missing value
             set t to current track
+            if (name of t as text) is not \(appleScriptStringLiteral(track.title)) then return missing value
+            if (artist of t as text) is not \(appleScriptStringLiteral(track.artist)) then return missing value
+            if (album of t as text) is not \(appleScriptStringLiteral(track.album)) then return missing value
+            \(durationCheck)
             if (count of artworks of t) is 0 then return missing value
             return data of artwork 1 of t
         end tell
-        """#
+        """
 
         let result = try execute(scriptSource)
         let data = result.data
@@ -99,9 +110,21 @@ struct MusicReader {
         _ = try execute(#"tell application id "com.apple.Music" to next track"#)
     }
 
+    func seek(to position: TimeInterval) throws {
+        let clampedPosition = max(0, position)
+        _ = try execute("tell application id \"com.apple.Music\" to set player position to \(clampedPosition)")
+    }
+
     private func parseAppleScriptNumber(_ value: String) -> Double {
         if let number = Double(value) { return number }
         return Double(value.replacingOccurrences(of: ",", with: ".")) ?? 0
+    }
+
+    private func appleScriptStringLiteral(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
     }
 
     private func execute(_ source: String) throws -> NSAppleEventDescriptor {

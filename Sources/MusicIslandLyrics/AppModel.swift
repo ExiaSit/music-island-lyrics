@@ -16,6 +16,7 @@ final class AppModel: ObservableObject {
     @Published var searchQuery = ""
     @Published private(set) var searchResults: [StoreSearchResult] = []
     @Published private(set) var searchStatus: StoreSearchStatus = .idle
+    @Published private(set) var seekPreviewPosition: TimeInterval?
 
     private let reader = MusicReader()
     private let lyricsService = LyricsService()
@@ -77,6 +78,24 @@ final class AppModel: ObservableObject {
         do {
             try reader.nextTrack()
             loadedTrackIdentity = nil
+            seekPreviewPosition = nil
+            Task { await refresh() }
+        } catch {
+            status = .error(error.localizedDescription)
+        }
+    }
+
+    func updateSeekPreview(_ position: TimeInterval) {
+        let duration = max(track?.duration ?? 0, 0)
+        seekPreviewPosition = min(max(position, 0), duration)
+    }
+
+    func finishSeeking() {
+        guard let position = seekPreviewPosition else { return }
+        seekPreviewPosition = nil
+
+        do {
+            try reader.seek(to: position)
             Task { await refresh() }
         } catch {
             status = .error(error.localizedDescription)
@@ -197,12 +216,19 @@ final class AppModel: ObservableObject {
         return lines[index + 1].text
     }
 
+    var displayPlaybackPosition: TimeInterval {
+        if let seekPreviewPosition { return seekPreviewPosition }
+        guard let track else { return 0 }
+        return track.estimatedPosition(at: Date())
+    }
+
     private func refresh() async {
         do {
             guard let snapshot = try reader.currentTrack() else {
                 track = nil
                 artwork = nil
                 artworkTask?.cancel()
+                seekPreviewPosition = nil
                 status = .waitingForMusic
                 loadedTrackIdentity = nil
                 return
@@ -229,7 +255,8 @@ final class AppModel: ObservableObject {
         loadedTrackIdentity = snapshot.identity
         lyricsTask?.cancel()
         artworkTask?.cancel()
-        artwork = try? reader.currentArtwork()
+        seekPreviewPosition = nil
+        artwork = try? reader.currentArtwork(for: snapshot)
         if artwork == nil {
             loadArtworkFallback(for: snapshot)
         }
@@ -271,7 +298,7 @@ final class AppModel: ObservableObject {
                 )
                 guard
                     !Task.isCancelled,
-                    let artworkURL = results.first?.artworkURL
+                    let artworkURL = Self.matchingArtworkURL(in: results, for: snapshot)
                 else { return }
 
                 let (data, _) = try await URLSession.shared.data(from: artworkURL)
@@ -289,6 +316,36 @@ final class AppModel: ObservableObject {
                 return
             }
         }
+    }
+
+    private nonisolated static func matchingArtworkURL(
+        in results: [StoreSearchResult],
+        for snapshot: TrackSnapshot
+    ) -> URL? {
+        let trackTitle = normalizeForMatching(snapshot.title)
+        let trackArtist = normalizeForMatching(snapshot.artist)
+        let trackAlbum = normalizeForMatching(snapshot.album)
+
+        return results.first { result in
+            let resultTitle = normalizeForMatching(result.title)
+            let resultArtist = normalizeForMatching(result.artist)
+            let resultAlbum = normalizeForMatching(result.album)
+
+            let titleMatches = resultTitle == trackTitle
+            let artistMatches = resultArtist.contains(trackArtist)
+                || trackArtist.contains(resultArtist)
+            let albumMatches = trackAlbum.isEmpty
+                || resultAlbum.isEmpty
+                || resultAlbum == trackAlbum
+
+            return titleMatches && artistMatches && albumMatches
+        }?.artworkURL
+    }
+
+    private nonisolated static func normalizeForMatching(_ value: String) -> String {
+        value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .replacingOccurrences(of: #"[^\p{L}\p{N}]"#, with: "", options: .regularExpression)
     }
 
     private func scheduleSearch(for rawQuery: String) {

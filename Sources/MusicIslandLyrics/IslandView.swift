@@ -104,6 +104,8 @@ struct IslandView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+                progressScrubber(for: track)
+
                 controlButton(
                     symbol: "magnifyingglass",
                     label: "搜索在线音乐",
@@ -275,6 +277,45 @@ struct IslandView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("在 Music 中打开 \(result.title)，\(result.artist)")
     }
+
+    private func progressScrubber(for track: TrackSnapshot) -> some View {
+        let duration = max(track.duration, 1)
+        let position = min(max(model.displayPlaybackPosition, 0), duration)
+
+        return VStack(spacing: 0) {
+            Slider(
+                value: Binding(
+                    get: {
+                        min(max(model.displayPlaybackPosition, 0), duration)
+                    },
+                    set: { newValue in
+                        model.updateSeekPreview(newValue)
+                    }
+                ),
+                in: 0...duration,
+                onEditingChanged: { editing in
+                    if !editing {
+                        model.finishSeeking()
+                    }
+                }
+            )
+            .controlSize(.mini)
+            .tint(.white.opacity(0.82))
+            .frame(height: 14)
+
+            HStack {
+                Text(formatTime(position))
+                Spacer(minLength: 0)
+                Text(formatTime(track.duration))
+            }
+            .font(.system(size: 8, weight: .medium, design: .rounded))
+            .foregroundStyle(.white.opacity(0.46))
+            .monospacedDigit()
+        }
+        .frame(width: 104, height: 30)
+        .accessibilityLabel("播放进度")
+    }
+
     private var artworkView: some View {
         Group {
             if let artwork = model.artwork {
@@ -318,6 +359,12 @@ struct IslandView: View {
         .buttonStyle(.plain)
         .help(label)
         .accessibilityLabel(label)
+    }
+
+    private func formatTime(_ time: TimeInterval) -> String {
+        guard time.isFinite, time > 0 else { return "0:00" }
+        let totalSeconds = Int(time.rounded())
+        return "\(totalSeconds / 60):\(String(format: "%02d", totalSeconds % 60))"
     }
 
     private var idleCompactContent: some View {
