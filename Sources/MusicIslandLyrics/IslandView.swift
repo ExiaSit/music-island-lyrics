@@ -304,21 +304,22 @@ struct IslandView: View {
         .accessibilityLabel("播放进度")
     }
 
+    @ViewBuilder
     private var artworkView: some View {
-        Group {
-            if let artwork = model.artwork {
-                Image(nsImage: artwork)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                WaveformArtworkPlaceholder(isPlaying: model.track?.isPlaying == true)
-            }
-        }
-        .frame(width: 28, height: 28)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(.white.opacity(0.12), lineWidth: 0.7)
+        if let artwork = model.artwork {
+            Image(nsImage: artwork)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 28, height: 28)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(.white.opacity(0.12), lineWidth: 0.7)
+                }
+        } else {
+            WaveformArtworkPlaceholder(isPlaying: model.track?.isPlaying == true)
+                .frame(width: 28, height: 28)
+                .accessibilityLabel("音频波形")
         }
     }
 
@@ -389,39 +390,29 @@ private struct WaveformArtworkPlaceholder: View {
         TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
             let phase = isPlaying ? context.date.timeIntervalSinceReferenceDate : 0
 
-            ZStack {
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.08, green: 0.10, blue: 0.14),
-                        Color(red: 0.02, green: 0.03, blue: 0.05)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-
-                HStack(alignment: .center, spacing: 2) {
-                    ForEach(baseHeights.indices, id: \.self) { index in
-                        Capsule()
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        .white.opacity(0.92),
-                                        .white.opacity(0.38)
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
+            HStack(alignment: .center, spacing: 2) {
+                ForEach(baseHeights.indices, id: \.self) { index in
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    .white.opacity(0.9),
+                                    .white.opacity(0.32)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
                             )
-                            .frame(
-                                width: 2.4,
-                                height: height(
-                                    for: index,
-                                    phase: phase
-                                )
+                        )
+                        .frame(
+                            width: 2.6,
+                            height: height(
+                                for: index,
+                                phase: phase
                             )
-                    }
+                        )
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
     }
 
