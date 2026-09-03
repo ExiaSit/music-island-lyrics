@@ -29,6 +29,7 @@ final class AppModel: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var searchQueryCancellable: AnyCancellable?
     private var loadedTrackIdentity: String?
+    private var lastArtworkProbe: (identity: String, date: Date)?
     private var searchCache: [SearchCacheKey: [StoreSearchResult]] = [:]
 
     init(
@@ -228,6 +229,7 @@ final class AppModel: ObservableObject {
                 track = nil
                 artwork = nil
                 artworkTask?.cancel()
+                lastArtworkProbe = nil
                 seekPreviewPosition = nil
                 status = .waitingForMusic
                 loadedTrackIdentity = nil
@@ -236,6 +238,7 @@ final class AppModel: ObservableObject {
 
             track = snapshot
             loadLyricsIfNeeded(for: snapshot)
+            retryMissingArtworkIfNeeded(for: snapshot)
         } catch let error as MusicReaderError {
             track = nil
             switch error {
@@ -257,6 +260,7 @@ final class AppModel: ObservableObject {
         artworkTask?.cancel()
         seekPreviewPosition = nil
         artwork = nil
+        lastArtworkProbe = nil
         loadArtwork(for: snapshot)
         lyrics = .notFound
         status = .loadingLyrics
@@ -281,6 +285,28 @@ final class AppModel: ObservableObject {
                 self?.lyrics = .notFound
                 self?.status = .error(error.localizedDescription)
             }
+        }
+    }
+
+    private func retryMissingArtworkIfNeeded(for snapshot: TrackSnapshot) {
+        guard artwork == nil else { return }
+
+        let now = Date()
+        if
+            let lastArtworkProbe,
+            lastArtworkProbe.identity == snapshot.identity,
+            now.timeIntervalSince(lastArtworkProbe.date) < 10
+        {
+            return
+        }
+        lastArtworkProbe = (snapshot.identity, now)
+
+        do {
+            guard let image = try reader.currentArtwork(for: snapshot) else { return }
+            guard track?.identity == snapshot.identity else { return }
+            artwork = image
+        } catch {
+            return
         }
     }
 
