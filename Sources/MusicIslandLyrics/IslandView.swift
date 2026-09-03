@@ -311,16 +311,7 @@ struct IslandView: View {
                     .resizable()
                     .scaledToFill()
             } else {
-                ZStack {
-                    LinearGradient(
-                        colors: [.pink, .purple, .blue],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    Image(systemName: "music.note")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white)
-                }
+                WaveformArtworkPlaceholder(isPlaying: model.track?.isPlaying == true)
             }
         }
         .frame(width: 28, height: 28)
@@ -386,6 +377,59 @@ struct IslandView: View {
         case .permissionRequired(let message), .error(let message): return message
         default: return "在 Apple Music 中播放一首歌"
         }
+    }
+}
+
+private struct WaveformArtworkPlaceholder: View {
+    let isPlaying: Bool
+
+    private let baseHeights: [CGFloat] = [7, 13, 18, 10, 16, 22, 12]
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
+            let phase = isPlaying ? context.date.timeIntervalSinceReferenceDate : 0
+
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.08, green: 0.10, blue: 0.14),
+                        Color(red: 0.02, green: 0.03, blue: 0.05)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+
+                HStack(alignment: .center, spacing: 2) {
+                    ForEach(baseHeights.indices, id: \.self) { index in
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        .white.opacity(0.92),
+                                        .white.opacity(0.38)
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                            .frame(
+                                width: 2.4,
+                                height: height(
+                                    for: index,
+                                    phase: phase
+                                )
+                            )
+                    }
+                }
+            }
+        }
+    }
+
+    private func height(for index: Int, phase: TimeInterval) -> CGFloat {
+        guard isPlaying else { return baseHeights[index] }
+        let wave = sin(phase * 4.2 + Double(index) * 0.95)
+        let scale = 0.78 + CGFloat((wave + 1) * 0.18)
+        return min(max(baseHeights[index] * scale, 5), 23)
     }
 }
 
