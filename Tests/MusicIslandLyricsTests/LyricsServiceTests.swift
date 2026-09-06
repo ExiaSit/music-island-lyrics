@@ -210,6 +210,51 @@ struct LyricsServiceTests {
         #expect(result == .synced([LyricLine(time: 2, text: "Right song")]))
     }
 
+    @Test func triesPrimaryTitleOnLrclibWhenFullTitleHasQualifier() async throws {
+        let loader = StubLyricsLoader { request in
+            let url = try #require(request.url)
+            if url.host == "lrclib.net", url.path == "/api/get" {
+                return (Data(), httpResponse(url: url, statusCode: 404))
+            }
+            if url.host == "lrclib.net", url.path == "/api/search" {
+                let query = url.queryItems
+                #expect(query["artist_name"] == "宇宙人")
+                if query["track_name"] == "没有人像我一样" {
+                    let searchBody = """
+                    [
+                      {
+                        "trackName": "没有人像我一样",
+                        "artistName": "宇宙人",
+                        "duration": 247,
+                        "instrumental": false,
+                        "plainLyrics": null,
+                        "syncedLyrics": "[00:02.00]Right primary-title result"
+                      }
+                    ]
+                    """
+                    return (Data(searchBody.utf8), httpResponse(url: url))
+                }
+                return (Data("[]".utf8), httpResponse(url: url))
+            }
+            return (Data(#"{"detail":"Not Found"}"#.utf8), httpResponse(url: url))
+        }
+
+        let service = LyricsService(loader: loader)
+        let result = try await service.fetch(for: TrackSnapshot(
+            title: "没有人像我一样 (影集《欠妳的那场婚礼》主题曲)",
+            artist: "宇宙人",
+            album: "没有人像我一样 (影集《欠妳的那场婚礼》主题曲) - Single",
+            duration: 247,
+            position: 0,
+            isPlaying: true,
+            capturedAt: Date()
+        ))
+
+        #expect(result == .synced([
+            LyricLine(time: 2, text: "Right primary-title result")
+        ]))
+    }
+
     @Test func sendsPrimaryTitleToLrcApiFallback() async throws {
         let loader = StubLyricsLoader { request in
             let url = try #require(request.url)

@@ -48,6 +48,12 @@ struct LyricsService: Sendable {
         let syncedLyrics: String?
     }
 
+    private struct LRCLIBExactQuery: Sendable {
+        let title: String
+        let includeAlbum: Bool
+        let includeDuration: Bool
+    }
+
     private let loader: any LyricsDataLoading
     private let decoder = JSONDecoder()
 
@@ -59,15 +65,24 @@ struct LyricsService: Sendable {
         var lrclibError: Error?
 
         do {
-            if let exact = try await requestExact(track: track) {
-                if isLikelyMatch(exact, for: track) {
-                    return makeResult(exact)
+            for query in lrclibExactQueries(for: track) {
+                if let exact = try await requestExact(
+                    track: track,
+                    title: query.title,
+                    includeAlbum: query.includeAlbum,
+                    includeDuration: query.includeDuration
+                ) {
+                    if isLikelyMatch(exact, for: track) {
+                        return makeResult(exact)
+                    }
                 }
             }
 
-            let matches = try await search(track: track)
-            if let best = bestMatch(in: matches, for: track) {
-                return makeResult(best)
+            for title in lrclibSearchTitles(for: track) {
+                let matches = try await search(track: track, title: title)
+                if let best = bestMatch(in: matches, for: track) {
+                    return makeResult(best)
+                }
             }
         } catch {
             lrclibError = error
@@ -89,9 +104,19 @@ struct LyricsService: Sendable {
         return .notFound
     }
 
-    private func requestExact(track: TrackSnapshot) async throws -> Response? {
+    private func requestExact(
+        track: TrackSnapshot,
+        title: String,
+        includeAlbum: Bool,
+        includeDuration: Bool
+    ) async throws -> Response? {
         var components = URLComponents(string: "https://lrclib.net/api/get")!
-        components.queryItems = queryItems(for: track, includeAlbum: true, includeDuration: true)
+        components.queryItems = queryItems(
+            for: track,
+            title: title,
+            includeAlbum: includeAlbum,
+            includeDuration: includeDuration
+        )
         let (data, response) = try await perform(url: components.url!, source: .lrclib)
         if response.statusCode == 404 { return nil }
         guard (200..<300).contains(response.statusCode) else {
@@ -100,9 +125,14 @@ struct LyricsService: Sendable {
         return try decoder.decode(Response.self, from: data)
     }
 
-    private func search(track: TrackSnapshot) async throws -> [Response] {
+    private func search(track: TrackSnapshot, title: String) async throws -> [Response] {
         var components = URLComponents(string: "https://lrclib.net/api/search")!
-        components.queryItems = queryItems(for: track, includeAlbum: false, includeDuration: false)
+        components.queryItems = queryItems(
+            for: track,
+            title: title,
+            includeAlbum: false,
+            includeDuration: false
+        )
         let (data, response) = try await perform(url: components.url!, source: .lrclib)
         guard (200..<300).contains(response.statusCode) else {
             throw LyricsServiceError.server(response.statusCode)
@@ -142,11 +172,12 @@ struct LyricsService: Sendable {
 
     private func queryItems(
         for track: TrackSnapshot,
+        title: String,
         includeAlbum: Bool,
         includeDuration: Bool
     ) -> [URLQueryItem] {
         var items = [
-            URLQueryItem(name: "track_name", value: track.title),
+            URLQueryItem(name: "track_name", value: title),
             URLQueryItem(name: "artist_name", value: track.artist)
         ]
         if includeAlbum, !track.album.isEmpty {
@@ -159,6 +190,36 @@ struct LyricsService: Sendable {
             ))
         }
         return items
+    }
+
+    private func lrclibExactQueries(for track: TrackSnapshot) -> [LRCLIBExactQuery] {
+        let primaryTitle = stripBracketedQualifiers(from: track.title)
+        var queries = [
+            LRCLIBExactQuery(
+                title: track.title,
+                includeAlbum: true,
+                includeDuration: true
+            )
+        ]
+
+        if !primaryTitle.isEmpty, normalize(primaryTitle) != normalize(track.title) {
+            queries.append(
+                LRCLIBExactQuery(
+                    title: primaryTitle,
+                    includeAlbum: false,
+                    includeDuration: true
+                )
+            )
+        }
+        return queries
+    }
+
+    private func lrclibSearchTitles(for track: TrackSnapshot) -> [String] {
+        let primaryTitle = stripBracketedQualifiers(from: track.title)
+        if !primaryTitle.isEmpty, normalize(primaryTitle) != normalize(track.title) {
+            return [track.title, primaryTitle]
+        }
+        return [track.title]
     }
 
     private func lrcApiQueryItems(for track: TrackSnapshot) -> [URLQueryItem] {
