@@ -53,7 +53,7 @@ final class OverlayController {
             backing: .buffered,
             defer: false
         )
-        panel.level = .statusBar
+        panel.level = Self.islandWindowLevel
         panel.isFloatingPanel = true
         panel.becomesKeyOnlyIfNeeded = true
         panel.isOpaque = false
@@ -76,6 +76,7 @@ final class OverlayController {
             .sink { [weak self] visible in
                 if visible {
                     self?.position(panel, extraHeight: model.islandExtraHeight)
+                    panel.level = Self.islandWindowLevel
                     panel.orderFrontRegardless()
                 } else {
                     panel.orderOut(nil)
@@ -135,6 +136,10 @@ final class OverlayController {
         NSScreen.screens.first ?? NSScreen.main
     }
 
+    private static var islandWindowLevel: NSWindow.Level {
+        NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
+    }
+
     private func menuBarGeometry(on screen: NSScreen) -> (bottom: CGFloat, height: CGFloat) {
         let measuredHeight = screen.frame.maxY - screen.visibleFrame.maxY
 
@@ -163,6 +168,10 @@ final class OverlayController {
             Task { @MainActor in
                 guard let self, let model, let panel = self.panel else { return }
                 guard NSEvent.pressedMouseButtons == 0 else { return }
+                if model.overlayVisible, !panel.isVisible {
+                    panel.orderFrontRegardless()
+                }
+                panel.level = Self.islandWindowLevel
 
                 if model.islandPresentation == .search {
                     self.setExtraHeight(model.islandExtraHeight)
