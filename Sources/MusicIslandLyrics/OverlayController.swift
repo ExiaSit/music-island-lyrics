@@ -35,6 +35,7 @@ final class OverlayController {
     private var presentationCancellable: AnyCancellable?
     private var resignKeyCancellable: AnyCancellable?
     private var hoverTimer: Timer?
+    private var hoverExitDate: Date?
 
     private init() {}
 
@@ -169,7 +170,21 @@ final class OverlayController {
                 }
 
                 let hovering = panel.frame.contains(NSEvent.mouseLocation)
-                model.updateHovering(hovering)
+                if hovering {
+                    self.hoverExitDate = nil
+                    model.updateHovering(true)
+                } else if model.islandPresentation == .hover {
+                    let now = Date()
+                    let exitDate = self.hoverExitDate ?? now
+                    self.hoverExitDate = exitDate
+                    if now.timeIntervalSince(exitDate) >= 0.45 {
+                        model.updateHovering(false)
+                        self.hoverExitDate = nil
+                    }
+                } else {
+                    self.hoverExitDate = nil
+                    model.updateHovering(false)
+                }
                 self.setExtraHeight(model.islandExtraHeight)
             }
         }
