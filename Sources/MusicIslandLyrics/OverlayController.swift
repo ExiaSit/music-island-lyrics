@@ -17,8 +17,130 @@ private final class InteractivePanel: NSPanel {
 
 @MainActor
 private final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    var contextMenuProvider: (() -> NSMenu)?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        contextMenuProvider?()
+    }
+}
+
+@MainActor
+private final class IslandContextMenuCoordinator: NSObject, NSMenuDelegate {
+    private weak var model: AppModel?
+    private let menuTrackingChanged: (Bool) -> Void
+
+    init(model: AppModel, menuTrackingChanged: @escaping (Bool) -> Void) {
+        self.model = model
+        self.menuTrackingChanged = menuTrackingChanged
+    }
+
+    func makeMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.delegate = self
+
+        menu.addItem(
+            NSMenuItem(
+                title: "搜索在线音乐",
+                action: #selector(openSearch),
+                keyEquivalent: ""
+            )
+            .targeting(self)
+        )
+        menu.addItem(.separator())
+
+        let displayItem = NSMenuItem(title: "显示屏幕", action: nil, keyEquivalent: "")
+        displayItem.submenu = makeDisplayMenu()
+        menu.addItem(displayItem)
+
+        menu.addItem(.separator())
+
+        let retryItem = NSMenuItem(
+            title: "重新匹配歌词",
+            action: #selector(retryLyrics),
+            keyEquivalent: ""
+        )
+        retryItem.target = self
+        retryItem.isEnabled = model?.track != nil
+        menu.addItem(retryItem)
+
+        menu.addItem(.separator())
+        menu.addItem(
+            NSMenuItem(
+                title: "退出 Music Island Lyrics",
+                action: #selector(quitApp),
+                keyEquivalent: ""
+            )
+            .targeting(self)
+        )
+
+        return menu
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        menuTrackingChanged(true)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        menuTrackingChanged(false)
+    }
+
+    private func makeDisplayMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.delegate = self
+
+        let autoItem = NSMenuItem(
+            title: "自动",
+            action: #selector(selectDisplay(_:)),
+            keyEquivalent: ""
+        )
+        autoItem.target = self
+        autoItem.state = model?.displayIsSelected(nil) == true ? .on : .off
+        menu.addItem(autoItem)
+
+        if model?.displayOptions.isEmpty == false {
+            menu.addItem(.separator())
+        }
+
+        model?.displayOptions.forEach { display in
+            let item = NSMenuItem(
+                title: display.menuTitle,
+                action: #selector(selectDisplay(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = NSNumber(value: display.id)
+            item.state = model?.displayIsSelected(display.id) == true ? .on : .off
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    @objc private func openSearch() {
+        model?.openSearch()
+    }
+
+    @objc private func selectDisplay(_ sender: NSMenuItem) {
+        let displayID = (sender.representedObject as? NSNumber)?.uint32Value
+        model?.selectDisplay(displayID)
+    }
+
+    @objc private func retryLyrics() {
+        model?.retryLyrics()
+    }
+
+    @objc private func quitApp() {
+        NSApplication.shared.terminate(nil)
+    }
+}
+
+private extension NSMenuItem {
+    func targeting(_ target: AnyObject) -> NSMenuItem {
+        self.target = target
+        return self
     }
 }
 
@@ -37,6 +159,8 @@ final class OverlayController {
     private var resignKeyCancellable: AnyCancellable?
     private var hoverTimer: Timer?
     private var hoverExitDate: Date?
+    private var isContextMenuOpen = false
+    private var contextMenuCoordinator: IslandContextMenuCoordinator?
 
     private init() {}
 
@@ -65,7 +189,21 @@ final class OverlayController {
         panel.hidesOnDeactivate = false
         panel.isMovable = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.contentView = FirstMouseHostingView(rootView: IslandView(model: model))
+        let hostingView = FirstMouseHostingView(rootView: IslandView(model: model))
+        let contextMenuCoordinator = IslandContextMenuCoordinator(
+            model: model,
+            menuTrackingChanged: { [weak self] isOpen in
+                self?.isContextMenuOpen = isOpen
+                if isOpen {
+                    self?.hoverExitDate = nil
+                }
+            }
+        )
+        hostingView.contextMenuProvider = { [weak contextMenuCoordinator] in
+            contextMenuCoordinator?.makeMenu() ?? NSMenu()
+        }
+        self.contextMenuCoordinator = contextMenuCoordinator
+        panel.contentView = hostingView
         panel.ignoresMouseEvents = false
         panel.acceptsMouseMovedEvents = true
         self.panel = panel
@@ -194,6 +332,7 @@ final class OverlayController {
         hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self, weak model] _ in
             Task { @MainActor in
                 guard let self, let model, let panel = self.panel else { return }
+                guard !self.isContextMenuOpen else { return }
                 guard NSEvent.pressedMouseButtons == 0 else { return }
                 if model.overlayVisible, !panel.isVisible {
                     panel.orderFrontRegardless()
