@@ -59,6 +59,30 @@ struct AppModelSearchTests {
         #expect(model.searchResults == [fast])
     }
 
+    @Test @MainActor func fallsBackToOtherStoreCountriesWhenPrimaryIsEmpty() async throws {
+        let result = searchResult(id: 8, title: "好久不見")
+        let service = StubStoreSearching(
+            countryResults: [
+                SearchStubKey(term: "好久不", country: "CN"): [],
+                SearchStubKey(term: "好久不", country: "HK"): [result]
+            ]
+        )
+        let model = AppModel(
+            searchService: service,
+            searchDebounce: .milliseconds(5),
+            regionCode: "CN"
+        )
+
+        model.openSearch()
+        model.searchQuery = "好久不"
+        try await Task.sleep(for: .milliseconds(80))
+
+        #expect(model.searchStatus == .results)
+        #expect(model.searchResults == [result])
+        #expect(await service.callCount(for: "好久不", country: "CN") == 1)
+        #expect(await service.callCount(for: "好久不", country: "HK") == 1)
+    }
+
     private func searchResult(id: Int64, title: String) -> StoreSearchResult {
         StoreSearchResult(
             id: id,
@@ -71,28 +95,55 @@ struct AppModelSearchTests {
     }
 }
 
+private struct SearchStubKey: Hashable {
+    let term: String
+    let country: String
+}
+
 private actor StubStoreSearching: StoreSearching {
     private let results: [String: [StoreSearchResult]]
+    private let countryResults: [SearchStubKey: [StoreSearchResult]]
     private let delays: [String: Duration]
     private var calls: [String: Int] = [:]
+    private var countryCalls: [SearchStubKey: Int] = [:]
 
     init(
         results: [String: [StoreSearchResult]],
+        countryResults: [SearchStubKey: [StoreSearchResult]] = [:],
         delays: [String: Duration] = [:]
     ) {
         self.results = results
+        self.countryResults = countryResults
+        self.delays = delays
+    }
+
+    init(
+        countryResults: [SearchStubKey: [StoreSearchResult]],
+        delays: [String: Duration] = [:]
+    ) {
+        self.results = [:]
+        self.countryResults = countryResults
         self.delays = delays
     }
 
     func search(term: String, country: String, limit: Int) async throws -> [StoreSearchResult] {
         calls[term, default: 0] += 1
+        let key = SearchStubKey(term: term, country: country)
+        countryCalls[key, default: 0] += 1
         if let delay = delays[term] {
             try await Task.sleep(for: delay)
+        }
+        if let countryResult = countryResults[key] {
+            return Array(countryResult.prefix(limit))
         }
         return Array((results[term] ?? []).prefix(limit))
     }
 
     func callCount(for term: String) -> Int {
         calls[term, default: 0]
+    }
+
+    func callCount(for term: String, country: String) -> Int {
+        countryCalls[SearchStubKey(term: term, country: country), default: 0]
     }
 }

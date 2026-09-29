@@ -588,11 +588,7 @@ final class AppModel: ObservableObject {
             do {
                 try await Task.sleep(for: searchDebounce)
                 try Task.checkCancellation()
-                let results = try await searchService.search(
-                    term: query,
-                    country: searchCountry,
-                    limit: 6
-                )
+                let results = try await searchStoreAcrossFallbackCountries(term: query)
                 try Task.checkCancellation()
                 guard searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == query else {
                     return
@@ -610,6 +606,41 @@ final class AppModel: ObservableObject {
                 searchStatus = .failure(error.localizedDescription)
             }
         }
+    }
+
+    private func searchStoreAcrossFallbackCountries(
+        term: String,
+        limit: Int = 6
+    ) async throws -> [StoreSearchResult] {
+        var firstError: Error?
+        for country in Self.storeSearchCountries(primary: searchCountry) {
+            do {
+                let results = try await searchService.search(
+                    term: term,
+                    country: country,
+                    limit: limit
+                )
+                if !results.isEmpty {
+                    return results
+                }
+            } catch {
+                if firstError == nil {
+                    firstError = error
+                }
+            }
+        }
+        if let firstError {
+            throw firstError
+        }
+        return []
+    }
+
+    private nonisolated static func storeSearchCountries(primary: String) -> [String] {
+        var countries = [StoreSearchService.normalizedCountry(primary)]
+        countries.append(contentsOf: ["HK", "TW", "US", "JP", "SG"])
+
+        var seen = Set<String>()
+        return countries.filter { seen.insert($0).inserted }
     }
 }
 

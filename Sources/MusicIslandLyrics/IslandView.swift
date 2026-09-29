@@ -146,7 +146,7 @@ struct IslandView: View {
                     .foregroundStyle(.white.opacity(0.55))
 
                 ZStack(alignment: .leading) {
-                    if model.searchQuery.isEmpty {
+                    if model.searchQuery.isEmpty && !searchFieldFocused {
                         Text("搜索歌名、歌手或专辑")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.white.opacity(0.78))
