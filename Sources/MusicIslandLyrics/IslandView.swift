@@ -37,6 +37,34 @@ struct IslandView: View {
         .contextMenu {
             Button("搜索在线音乐") { model.openSearch() }
             Divider()
+            Menu("显示屏幕") {
+                Button {
+                    model.selectDisplay(nil)
+                } label: {
+                    Label(
+                        "自动",
+                        systemImage: model.displayIsSelected(nil) ? "checkmark" : "display"
+                    )
+                }
+
+                if !model.displayOptions.isEmpty {
+                    Divider()
+                }
+
+                ForEach(model.displayOptions) { display in
+                    Button {
+                        model.selectDisplay(display.id)
+                    } label: {
+                        Label(
+                            display.menuTitle,
+                            systemImage: model.displayIsSelected(display.id)
+                                ? "checkmark"
+                                : "display"
+                        )
+                    }
+                }
+            }
+            Divider()
             Button("重新匹配歌词") { model.retryLyrics() }
                 .disabled(model.track == nil)
             Divider()

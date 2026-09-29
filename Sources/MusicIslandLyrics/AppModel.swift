@@ -17,6 +17,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var searchResults: [StoreSearchResult] = []
     @Published private(set) var searchStatus: StoreSearchStatus = .idle
     @Published private(set) var seekPreviewPosition: TimeInterval?
+    @Published private(set) var displayOptions: [OverlayDisplayOption] = []
+    @Published private(set) var selectedDisplayID: UInt32?
 
     private let reader = MusicReader()
     private let lyricsService = LyricsService()
@@ -32,6 +34,8 @@ final class AppModel: ObservableObject {
     private var lastArtworkProbe: (identity: String, date: Date)?
     private var searchCache: [SearchCacheKey: [StoreSearchResult]] = [:]
 
+    private static let selectedDisplayDefaultsKey = "selectedOverlayDisplayID"
+
     init(
         searchService: any StoreSearching = StoreSearchService(),
         searchDebounce: Duration = .milliseconds(600),
@@ -42,6 +46,12 @@ final class AppModel: ObservableObject {
         self.searchCountry = StoreSearchService.normalizedCountry(
             regionCode ?? Locale.current.region?.identifier ?? "CN"
         )
+        if UserDefaults.standard.object(forKey: Self.selectedDisplayDefaultsKey) != nil {
+            self.selectedDisplayID = UInt32(
+                UserDefaults.standard.integer(forKey: Self.selectedDisplayDefaultsKey)
+            )
+        }
+        refreshDisplayOptions()
 
         searchQueryCancellable = $searchQuery
             .removeDuplicates()
@@ -58,6 +68,40 @@ final class AppModel: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(750))
             }
         }
+    }
+
+    func refreshDisplayOptions() {
+        let mainDisplayID = NSScreen.main?.overlayDisplayID
+        displayOptions = NSScreen.screens.enumerated().compactMap { index, screen in
+            guard let id = screen.overlayDisplayID else { return nil }
+            var title = "屏幕 \(index + 1)：\(screen.overlayDisplayName)"
+            if id == mainDisplayID {
+                title += "（主屏幕）"
+            }
+            let frame = screen.frame
+            let detail = "\(Int(frame.width))×\(Int(frame.height))"
+            return OverlayDisplayOption(id: id, title: title, detail: detail)
+        }
+
+        if
+            let selectedDisplayID,
+            !displayOptions.contains(where: { $0.id == selectedDisplayID })
+        {
+            selectDisplay(nil)
+        }
+    }
+
+    func selectDisplay(_ displayID: UInt32?) {
+        selectedDisplayID = displayID
+        if let displayID {
+            UserDefaults.standard.set(Int(displayID), forKey: Self.selectedDisplayDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.selectedDisplayDefaultsKey)
+        }
+    }
+
+    func displayIsSelected(_ displayID: UInt32?) -> Bool {
+        selectedDisplayID == displayID
     }
 
     func retryLyrics() {

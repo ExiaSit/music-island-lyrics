@@ -33,6 +33,7 @@ final class OverlayController {
     private var panel: NSPanel?
     private var visibilityCancellable: AnyCancellable?
     private var presentationCancellable: AnyCancellable?
+    private var displayCancellable: AnyCancellable?
     private var resignKeyCancellable: AnyCancellable?
     private var hoverTimer: Timer?
     private var hoverExitDate: Date?
@@ -41,8 +42,9 @@ final class OverlayController {
 
     func start(model: AppModel) {
         guard panel == nil else { return }
+        model.refreshDisplayOptions()
 
-        if let screen = targetScreen {
+        if let screen = targetScreen(model: model) {
             collapsedHeight = menuBarGeometry(on: screen).height
             model.compactIslandHeight = collapsedHeight
         }
@@ -67,7 +69,7 @@ final class OverlayController {
         panel.acceptsMouseMovedEvents = true
         self.panel = panel
 
-        position(panel, extraHeight: 0)
+        position(panel, extraHeight: 0, model: model)
         panel.orderFrontRegardless()
         startHoverTracking(model: model)
 
@@ -75,7 +77,7 @@ final class OverlayController {
             .removeDuplicates()
             .sink { [weak self] visible in
                 if visible {
-                    self?.position(panel, extraHeight: model.islandExtraHeight)
+                    self?.position(panel, extraHeight: model.islandExtraHeight, model: model)
                     panel.level = Self.islandWindowLevel
                     panel.orderFrontRegardless()
                 } else {
@@ -87,9 +89,24 @@ final class OverlayController {
             .removeDuplicates()
             .sink { [weak self, weak panel] presentation in
                 guard let self, let panel else { return }
-                self.position(panel, extraHeight: model.islandExtraHeight)
+                self.position(panel, extraHeight: model.islandExtraHeight, model: model)
                 if presentation == .search {
                     panel.makeKeyAndOrderFront(nil)
+                }
+            }
+
+        displayCancellable = model.$selectedDisplayID
+            .removeDuplicates()
+            .sink { [weak self, weak panel] _ in
+                Task { @MainActor in
+                    guard let self, let panel else { return }
+                    if let screen = self.targetScreen(model: model) {
+                        self.collapsedHeight = self.menuBarGeometry(on: screen).height
+                        model.compactIslandHeight = self.collapsedHeight
+                    }
+                    self.position(panel, extraHeight: model.islandExtraHeight, model: model)
+                    panel.level = Self.islandWindowLevel
+                    panel.orderFrontRegardless()
                 }
             }
 
@@ -110,18 +127,20 @@ final class OverlayController {
             queue: .main
         ) { [weak self, weak panel] _ in
             Task { @MainActor in
-                guard let self, let panel, let screen = self.targetScreen else { return }
+                guard let self, let panel else { return }
+                model.refreshDisplayOptions()
+                guard let screen = self.targetScreen(model: model) else { return }
                 self.collapsedHeight = self.menuBarGeometry(on: screen).height
                 model.compactIslandHeight = self.collapsedHeight
-                self.position(panel, extraHeight: model.islandExtraHeight)
+                self.position(panel, extraHeight: model.islandExtraHeight, model: model)
             }
         }
     }
 
     /// The compact island occupies exactly the system menu-bar band. When it
     /// expands, only the additional content grows below the menu bar.
-    private func position(_ panel: NSPanel, extraHeight: CGFloat) {
-        guard let screen = targetScreen else { return }
+    private func position(_ panel: NSPanel, extraHeight: CGFloat, model: AppModel) {
+        guard let screen = targetScreen(model: model) else { return }
         let geometry = menuBarGeometry(on: screen)
         let frame = NSRect(
             x: screen.frame.midX - panel.frame.width / 2 + panelCenterOffset,
@@ -132,8 +151,13 @@ final class OverlayController {
         panel.setFrame(frame, display: true)
     }
 
-    private var targetScreen: NSScreen? {
-        NSScreen.screens.first ?? NSScreen.main
+    private func targetScreen(model: AppModel) -> NSScreen? {
+        if let selectedDisplayID = model.selectedDisplayID {
+            return NSScreen.screens.first { $0.overlayDisplayID == selectedDisplayID }
+                ?? NSScreen.main
+                ?? NSScreen.screens.first
+        }
+        return NSScreen.main ?? NSScreen.screens.first
     }
 
     private static var islandWindowLevel: NSWindow.Level {
@@ -156,10 +180,10 @@ final class OverlayController {
         return (screen.frame.maxY - height, height)
     }
 
-    private func setExtraHeight(_ extraHeight: CGFloat) {
+    private func setExtraHeight(_ extraHeight: CGFloat, model: AppModel) {
         guard let panel else { return }
         guard abs(panel.frame.height - (collapsedHeight + extraHeight)) > 0.5 else { return }
-        position(panel, extraHeight: extraHeight)
+        position(panel, extraHeight: extraHeight, model: model)
     }
 
     private func startHoverTracking(model: AppModel) {
@@ -174,7 +198,7 @@ final class OverlayController {
                 panel.level = Self.islandWindowLevel
 
                 if model.islandPresentation == .search {
-                    self.setExtraHeight(model.islandExtraHeight)
+                    self.setExtraHeight(model.islandExtraHeight, model: model)
                     return
                 }
 
@@ -194,7 +218,7 @@ final class OverlayController {
                     self.hoverExitDate = nil
                     model.updateHovering(false)
                 }
-                self.setExtraHeight(model.islandExtraHeight)
+                self.setExtraHeight(model.islandExtraHeight, model: model)
             }
         }
     }
