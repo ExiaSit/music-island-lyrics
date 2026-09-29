@@ -13,6 +13,7 @@ final class AppModel: ObservableObject {
     @Published var overlayVisible = true
     @Published private(set) var islandPresentation: IslandPresentation = .compact
     @Published var compactIslandHeight: CGFloat = 38
+    @Published private(set) var compactLyricWidth: CGFloat = 120
     @Published var searchQuery = ""
     @Published private(set) var searchResults: [StoreSearchResult] = []
     @Published private(set) var searchStatus: StoreSearchStatus = .idle
@@ -102,6 +103,10 @@ final class AppModel: ObservableObject {
 
     func displayIsSelected(_ displayID: UInt32?) -> Bool {
         selectedDisplayID == displayID
+    }
+
+    func updateCompactLayout(for screen: NSScreen) {
+        compactLyricWidth = screen.isBuiltInDisplay ? 120 : 260
     }
 
     func retryLyrics() {

@@ -47,6 +47,7 @@ final class OverlayController {
         if let screen = targetScreen(model: model) {
             collapsedHeight = menuBarGeometry(on: screen).height
             model.compactIslandHeight = collapsedHeight
+            model.updateCompactLayout(for: screen)
         }
 
         let panel = InteractivePanel(
@@ -103,6 +104,7 @@ final class OverlayController {
                     if let screen = self.targetScreen(model: model) {
                         self.collapsedHeight = self.menuBarGeometry(on: screen).height
                         model.compactIslandHeight = self.collapsedHeight
+                        model.updateCompactLayout(for: screen)
                     }
                     self.position(panel, extraHeight: model.islandExtraHeight, model: model)
                     panel.level = Self.islandWindowLevel
@@ -132,6 +134,7 @@ final class OverlayController {
                 guard let screen = self.targetScreen(model: model) else { return }
                 self.collapsedHeight = self.menuBarGeometry(on: screen).height
                 model.compactIslandHeight = self.collapsedHeight
+                model.updateCompactLayout(for: screen)
                 self.position(panel, extraHeight: model.islandExtraHeight, model: model)
             }
         }

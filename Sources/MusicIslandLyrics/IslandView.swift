@@ -101,9 +101,9 @@ struct IslandView: View {
                             .lineLimit(1)
                     }
                 }
-                .frame(width: 120, height: 30, alignment: .leading)
+                .frame(width: model.compactLyricWidth, height: 30, alignment: .leading)
 
-                Color.clear.frame(width: 172)
+                Spacer(minLength: 0)
 
                 artworkView
             }

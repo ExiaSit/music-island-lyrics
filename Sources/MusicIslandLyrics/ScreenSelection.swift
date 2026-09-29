@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 
 struct OverlayDisplayOption: Identifiable, Equatable, Sendable {
@@ -22,5 +23,10 @@ extension NSScreen {
             return localizedName
         }
         return "显示器"
+    }
+
+    var isBuiltInDisplay: Bool {
+        guard let displayID = overlayDisplayID else { return false }
+        return CGDisplayIsBuiltin(displayID) != 0
     }
 }
